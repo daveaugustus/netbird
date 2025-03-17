@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"sort"
+	"strings"
 
 	"golang.org/x/exp/maps"
 
@@ -35,8 +36,13 @@ func (s *Server) ListNetworks(context.Context, *proto.ListNetworksRequest) (*pro
 		return nil, fmt.Errorf("not connected")
 	}
 
-	routesMap := engine.GetRouteManager().GetClientRoutesWithNetID()
-	routeSelector := engine.GetRouteManager().GetRouteSelector()
+	routeMgr := engine.GetRouteManager()
+	if routeMgr == nil {
+		return nil, fmt.Errorf("no route manager")
+	}
+
+	routesMap := routeMgr.GetClientRoutesWithNetID()
+	routeSelector := routeMgr.GetRouteSelector()
 
 	var routes []*selectRoute
 	for id, rt := range routesMap {
@@ -122,6 +128,10 @@ func (s *Server) SelectNetworks(_ context.Context, req *proto.SelectNetworksRequ
 	}
 
 	routeManager := engine.GetRouteManager()
+	if routeManager == nil {
+		return nil, fmt.Errorf("no route manager")
+	}
+
 	routeSelector := routeManager.GetRouteSelector()
 	if req.GetAll() {
 		routeSelector.SelectAllRoutes()
@@ -133,6 +143,18 @@ func (s *Server) SelectNetworks(_ context.Context, req *proto.SelectNetworksRequ
 		}
 	}
 	routeManager.TriggerSelection(routeManager.GetClientRoutes())
+
+	s.statusRecorder.PublishEvent(
+		proto.SystemEvent_INFO,
+		proto.SystemEvent_SYSTEM,
+		"Network selection changed",
+		"",
+		map[string]string{
+			"networks": strings.Join(req.GetNetworkIDs(), ", "),
+			"append":   fmt.Sprint(req.GetAppend()),
+			"all":      fmt.Sprint(req.GetAll()),
+		},
+	)
 
 	return &proto.SelectNetworksResponse{}, nil
 }
@@ -152,6 +174,10 @@ func (s *Server) DeselectNetworks(_ context.Context, req *proto.SelectNetworksRe
 	}
 
 	routeManager := engine.GetRouteManager()
+	if routeManager == nil {
+		return nil, fmt.Errorf("no route manager")
+	}
+
 	routeSelector := routeManager.GetRouteSelector()
 	if req.GetAll() {
 		routeSelector.DeselectAllRoutes()
@@ -163,6 +189,18 @@ func (s *Server) DeselectNetworks(_ context.Context, req *proto.SelectNetworksRe
 		}
 	}
 	routeManager.TriggerSelection(routeManager.GetClientRoutes())
+
+	s.statusRecorder.PublishEvent(
+		proto.SystemEvent_INFO,
+		proto.SystemEvent_SYSTEM,
+		"Network deselection changed",
+		"",
+		map[string]string{
+			"networks": strings.Join(req.GetNetworkIDs(), ", "),
+			"append":   fmt.Sprint(req.GetAppend()),
+			"all":      fmt.Sprint(req.GetAll()),
+		},
+	)
 
 	return &proto.SelectNetworksResponse{}, nil
 }

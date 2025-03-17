@@ -3,6 +3,7 @@ package testing_tools
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,17 +14,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/netbirdio/netbird/management/server/util"
+	"github.com/golang-jwt/jwt"
+	"github.com/netbirdio/management-integrations/integrations"
 	"github.com/stretchr/testify/assert"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
+	"github.com/netbirdio/netbird/management/server/peers"
+	"github.com/netbirdio/netbird/management/server/permissions"
+
 	"github.com/netbirdio/netbird/management/server"
 	"github.com/netbirdio/netbird/management/server/activity"
+	"github.com/netbirdio/netbird/management/server/auth"
+	nbcontext "github.com/netbirdio/netbird/management/server/context"
 	"github.com/netbirdio/netbird/management/server/geolocation"
 	"github.com/netbirdio/netbird/management/server/groups"
 	nbhttp "github.com/netbirdio/netbird/management/server/http"
-	"github.com/netbirdio/netbird/management/server/http/configs"
-	"github.com/netbirdio/netbird/management/server/jwtclaims"
 	"github.com/netbirdio/netbird/management/server/networks"
 	"github.com/netbirdio/netbird/management/server/networks/resources"
 	"github.com/netbirdio/netbird/management/server/networks/routers"
@@ -32,6 +37,7 @@ import (
 	"github.com/netbirdio/netbird/management/server/store"
 	"github.com/netbirdio/netbird/management/server/telemetry"
 	"github.com/netbirdio/netbird/management/server/types"
+	"github.com/netbirdio/netbird/management/server/util"
 )
 
 const (
@@ -110,16 +116,29 @@ func BuildApiBlackBoxWithDBState(t TB, sqlFile string, expectedPeerUpdate *serve
 
 	geoMock := &geolocation.Mock{}
 	validatorMock := server.MocIntegratedValidator{}
-	am, err := server.BuildManager(context.Background(), store, peersUpdateManager, nil, "", "", &activity.InMemoryEventStore{}, geoMock, false, validatorMock, metrics)
+	proxyController := integrations.NewController(store)
+	am, err := server.BuildManager(context.Background(), store, peersUpdateManager, nil, "", "", &activity.InMemoryEventStore{}, geoMock, false, validatorMock, metrics, proxyController)
 	if err != nil {
 		t.Fatalf("Failed to create manager: %v", err)
+	}
+
+	// @note this is required so that PAT's validate from store, but JWT's are mocked
+	authManager := auth.NewManager(store, "", "", "", "", []string{}, false)
+	authManagerMock := &auth.MockManager{
+		ValidateAndParseTokenFunc:       mockValidateAndParseToken,
+		EnsureUserAccessByJWTGroupsFunc: authManager.EnsureUserAccessByJWTGroups,
+		MarkPATUsedFunc:                 authManager.MarkPATUsed,
+		GetPATInfoFunc:                  authManager.GetPATInfo,
 	}
 
 	networksManagerMock := networks.NewManagerMock()
 	resourcesManagerMock := resources.NewManagerMock()
 	routersManagerMock := routers.NewManagerMock()
 	groupsManagerMock := groups.NewManagerMock()
-	apiHandler, err := nbhttp.NewAPIHandler(context.Background(), am, networksManagerMock, resourcesManagerMock, routersManagerMock, groupsManagerMock, geoMock, &jwtclaims.JwtValidatorMock{}, metrics, configs.AuthCfg{}, validatorMock)
+	permissionsManagerMock := permissions.NewManagerMock()
+	peersManager := peers.NewManager(store, permissionsManagerMock)
+
+	apiHandler, err := nbhttp.NewAPIHandler(context.Background(), am, networksManagerMock, resourcesManagerMock, routersManagerMock, groupsManagerMock, geoMock, authManagerMock, metrics, validatorMock, proxyController, permissionsManagerMock, peersManager)
 	if err != nil {
 		t.Fatalf("Failed to create API handler: %v", err)
 	}
@@ -308,4 +327,26 @@ func EvaluateBenchmarkResults(b *testing.B, name string, duration time.Duration,
 	if msPerOp > maxExpected {
 		b.Fatalf("Benchmark %s failed: too slow (%.2f ms/op, maximum %.2f ms/op)", name, msPerOp, maxExpected)
 	}
+}
+
+func mockValidateAndParseToken(_ context.Context, token string) (nbcontext.UserAuth, *jwt.Token, error) {
+	userAuth := nbcontext.UserAuth{}
+
+	switch token {
+	case "testUserId", "testAdminId", "testOwnerId", "testServiceUserId", "testServiceAdminId", "blockedUserId":
+		userAuth.UserId = token
+		userAuth.AccountId = "testAccountId"
+		userAuth.Domain = "test.com"
+		userAuth.DomainCategory = "private"
+	case "otherUserId":
+		userAuth.UserId = "otherUserId"
+		userAuth.AccountId = "otherAccountId"
+		userAuth.Domain = "other.com"
+		userAuth.DomainCategory = "private"
+	case "invalidToken":
+		return userAuth, nil, errors.New("invalid token")
+	}
+
+	jwtToken := jwt.New(jwt.SigningMethodHS256)
+	return userAuth, jwtToken, nil
 }

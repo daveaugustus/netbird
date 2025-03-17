@@ -23,6 +23,7 @@ import (
 	"github.com/netbirdio/netbird/client/internal/listener"
 	"github.com/netbirdio/netbird/client/internal/peer"
 	"github.com/netbirdio/netbird/client/internal/stdnet"
+	cProto "github.com/netbirdio/netbird/client/proto"
 	"github.com/netbirdio/netbird/client/ssh"
 	"github.com/netbirdio/netbird/client/system"
 	mgm "github.com/netbirdio/netbird/management/client"
@@ -60,7 +61,7 @@ func NewConnectClient(
 }
 
 // Run with main logic.
-func (c *ConnectClient) Run(runningChan chan error) error {
+func (c *ConnectClient) Run(runningChan chan struct{}) error {
 	return c.run(MobileDependency{}, runningChan)
 }
 
@@ -101,9 +102,19 @@ func (c *ConnectClient) RunOniOS(
 	return c.run(mobileDependency, nil)
 }
 
-func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan error) error {
+func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan struct{}) error {
 	defer func() {
 		if r := recover(); r != nil {
+			rec := c.statusRecorder
+			if rec != nil {
+				rec.PublishEvent(
+					cProto.SystemEvent_CRITICAL, cProto.SystemEvent_SYSTEM,
+					"panic occurred",
+					"The Netbird service panicked. Please restart the service and submit a bug report with the client logs.",
+					nil,
+				)
+			}
+
 			log.Panicf("Panic occurred: %v, stack trace: %s", r, string(debug.Stack()))
 		}
 	}()
@@ -148,10 +159,9 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 	}
 
 	defer c.statusRecorder.ClientStop()
-	runningChanOpen := true
 	operation := func() error {
 		// if context cancelled we not start new backoff cycle
-		if c.isContextCancelled() {
+		if c.ctx.Err() != nil {
 			return nil
 		}
 
@@ -271,10 +281,11 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 		log.Infof("Netbird engine started, the IP is: %s", peerConfig.GetAddress())
 		state.Set(StatusConnected)
 
-		if runningChan != nil && runningChanOpen {
-			runningChan <- nil
-			close(runningChan)
-			runningChanOpen = false
+		if runningChan != nil {
+			select {
+			case runningChan <- struct{}{}:
+			default:
+			}
 		}
 
 		<-engineCtx.Done()
@@ -366,15 +377,6 @@ func (c *ConnectClient) Stop() error {
 	}
 
 	return nil
-}
-
-func (c *ConnectClient) isContextCancelled() bool {
-	select {
-	case <-c.ctx.Done():
-		return true
-	default:
-		return false
-	}
 }
 
 // SetNetworkMapPersistence enables or disables network map persistence.

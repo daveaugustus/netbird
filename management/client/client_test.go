@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netbirdio/netbird/management/server/activity"
+	"github.com/netbirdio/netbird/management/server/integrations/port_forwarding"
 	"github.com/netbirdio/netbird/management/server/settings"
 	"github.com/netbirdio/netbird/management/server/store"
 	"github.com/netbirdio/netbird/management/server/telemetry"
@@ -72,13 +73,13 @@ func startManagement(t *testing.T) (*grpc.Server, net.Listener) {
 	metrics, err := telemetry.NewDefaultAppMetrics(context.Background())
 	require.NoError(t, err)
 
-	accountManager, err := mgmt.BuildManager(context.Background(), store, peersUpdateManager, nil, "", "netbird.selfhosted", eventStore, nil, false, ia, metrics)
+	accountManager, err := mgmt.BuildManager(context.Background(), store, peersUpdateManager, nil, "", "netbird.selfhosted", eventStore, nil, false, ia, metrics, port_forwarding.NewControllerMock())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	secretsManager := mgmt.NewTimeBasedAuthSecretsManager(peersUpdateManager, config.TURNConfig, config.Relay)
-	mgmtServer, err := mgmt.NewServer(context.Background(), config, accountManager, settings.NewManager(store), peersUpdateManager, secretsManager, nil, nil)
+	mgmtServer, err := mgmt.NewServer(context.Background(), config, accountManager, settings.NewManager(store), peersUpdateManager, secretsManager, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +206,7 @@ func TestClient_LoginRegistered(t *testing.T) {
 		t.Error(err)
 	}
 	info := system.GetInfo(context.TODO())
-	resp, err := client.Register(*key, ValidKey, "", info, nil)
+	resp, err := client.Register(*key, ValidKey, "", info, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -235,7 +236,7 @@ func TestClient_Sync(t *testing.T) {
 	}
 
 	info := system.GetInfo(context.TODO())
-	_, err = client.Register(*serverKey, ValidKey, "", info, nil)
+	_, err = client.Register(*serverKey, ValidKey, "", info, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -251,7 +252,7 @@ func TestClient_Sync(t *testing.T) {
 	}
 
 	info = system.GetInfo(context.TODO())
-	_, err = remoteClient.Register(*serverKey, ValidKey, "", info, nil)
+	_, err = remoteClient.Register(*serverKey, ValidKey, "", info, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +353,7 @@ func Test_SystemMetaDataFromClient(t *testing.T) {
 	}
 
 	info := system.GetInfo(context.TODO())
-	_, err = testClient.Register(*key, ValidKey, "", info, nil)
+	_, err = testClient.Register(*key, ValidKey, "", info, nil, nil)
 	if err != nil {
 		t.Errorf("error while trying to register client: %v", err)
 	}

@@ -35,17 +35,18 @@ import (
 
 	"github.com/netbirdio/management-integrations/integrations"
 
+	"github.com/netbirdio/netbird/management/server/peers"
+
 	"github.com/netbirdio/netbird/encryption"
-	"github.com/netbirdio/netbird/formatter"
+	"github.com/netbirdio/netbird/formatter/hook"
 	mgmtProto "github.com/netbirdio/netbird/management/proto"
 	"github.com/netbirdio/netbird/management/server"
+	"github.com/netbirdio/netbird/management/server/auth"
 	nbContext "github.com/netbirdio/netbird/management/server/context"
 	"github.com/netbirdio/netbird/management/server/geolocation"
 	"github.com/netbirdio/netbird/management/server/groups"
 	nbhttp "github.com/netbirdio/netbird/management/server/http"
-	"github.com/netbirdio/netbird/management/server/http/configs"
 	"github.com/netbirdio/netbird/management/server/idp"
-	"github.com/netbirdio/netbird/management/server/jwtclaims"
 	"github.com/netbirdio/netbird/management/server/metrics"
 	"github.com/netbirdio/netbird/management/server/networks"
 	"github.com/netbirdio/netbird/management/server/networks/resources"
@@ -91,7 +92,7 @@ var (
 			flag.Parse()
 
 			//nolint
-			ctx := context.WithValue(cmd.Context(), formatter.ExecutionContextKey, formatter.SystemSource)
+			ctx := context.WithValue(cmd.Context(), hook.ExecutionContextKey, hook.SystemSource)
 
 			err := util.InitLog(logLevel, logFile)
 			if err != nil {
@@ -137,7 +138,7 @@ var (
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
 			//nolint
-			ctx = context.WithValue(ctx, formatter.ExecutionContextKey, formatter.SystemSource)
+			ctx = context.WithValue(ctx, hook.ExecutionContextKey, hook.SystemSource)
 
 			err := handleRebrand(cmd)
 			if err != nil {
@@ -200,8 +201,15 @@ var (
 			if err != nil {
 				return fmt.Errorf("failed to initialize integrated peer validator: %v", err)
 			}
+
+			userManager := users.NewManager(store)
+			settingsManager := settings.NewManager(store)
+			permissionsManager := permissions.NewManager(userManager, settingsManager)
+			peersManager := peers.NewManager(store, permissionsManager)
+			proxyController := integrations.NewController(store)
+
 			accountManager, err := server.BuildManager(ctx, store, peersUpdateManager, idpManager, mgmtSingleAccModeDomain,
-				dnsDomain, eventStore, geo, userDeleteFromIDPEnabled, integratedPeerValidator, appMetrics)
+				dnsDomain, eventStore, geo, userDeleteFromIDPEnabled, integratedPeerValidator, appMetrics, proxyController)
 			if err != nil {
 				return fmt.Errorf("failed to build default manager: %v", err)
 			}
@@ -255,33 +263,21 @@ var (
 				tlsEnabled = true
 			}
 
-			jwtValidator, err := jwtclaims.NewJWTValidator(
-				ctx,
+			authManager := auth.NewManager(store,
 				config.HttpConfig.AuthIssuer,
-				config.GetAuthAudiences(),
+				config.HttpConfig.AuthAudience,
 				config.HttpConfig.AuthKeysLocation,
-				config.HttpConfig.IdpSignKeyRefreshEnabled,
-			)
-			if err != nil {
-				return fmt.Errorf("failed creating JWT validator: %v", err)
-			}
+				config.HttpConfig.AuthUserIDClaim,
+				config.GetAuthAudiences(),
+				config.HttpConfig.IdpSignKeyRefreshEnabled)
 
-			httpAPIAuthCfg := configs.AuthCfg{
-				Issuer:       config.HttpConfig.AuthIssuer,
-				Audience:     config.HttpConfig.AuthAudience,
-				UserIDClaim:  config.HttpConfig.AuthUserIDClaim,
-				KeysLocation: config.HttpConfig.AuthKeysLocation,
-			}
-
-			userManager := users.NewManager(store)
-			settingsManager := settings.NewManager(store)
-			permissionsManager := permissions.NewManager(userManager, settingsManager)
 			groupsManager := groups.NewManager(store, permissionsManager, accountManager)
 			resourcesManager := resources.NewManager(store, permissionsManager, groupsManager, accountManager)
 			routersManager := routers.NewManager(store, permissionsManager, accountManager)
 			networksManager := networks.NewManager(store, permissionsManager, resourcesManager, routersManager, accountManager)
 
-			httpAPIHandler, err := nbhttp.NewAPIHandler(ctx, accountManager, networksManager, resourcesManager, routersManager, groupsManager, geo, jwtValidator, appMetrics, httpAPIAuthCfg, integratedPeerValidator)
+			httpAPIHandler, err := nbhttp.NewAPIHandler(ctx, accountManager, networksManager, resourcesManager, routersManager, groupsManager, geo, authManager, appMetrics, integratedPeerValidator, proxyController, permissionsManager, peersManager)
+
 			if err != nil {
 				return fmt.Errorf("failed creating HTTP API handler: %v", err)
 			}
@@ -290,7 +286,7 @@ var (
 			ephemeralManager.LoadInitialPeers(ctx)
 
 			gRPCAPIHandler := grpc.NewServer(gRPCOpts...)
-			srv, err := server.NewServer(ctx, config, accountManager, settingsManager, peersUpdateManager, secretsManager, appMetrics, ephemeralManager)
+			srv, err := server.NewServer(ctx, config, accountManager, settingsManager, peersUpdateManager, secretsManager, appMetrics, ephemeralManager, authManager)
 			if err != nil {
 				return fmt.Errorf("failed creating gRPC API handler: %v", err)
 			}
@@ -386,7 +382,7 @@ func unaryInterceptor(
 ) (interface{}, error) {
 	reqID := uuid.New().String()
 	//nolint
-	ctx = context.WithValue(ctx, formatter.ExecutionContextKey, formatter.GRPCSource)
+	ctx = context.WithValue(ctx, hook.ExecutionContextKey, hook.GRPCSource)
 	//nolint
 	ctx = context.WithValue(ctx, nbContext.RequestIDKey, reqID)
 	return handler(ctx, req)
@@ -401,7 +397,7 @@ func streamInterceptor(
 	reqID := uuid.New().String()
 	wrapped := grpcMiddleware.WrapServerStream(ss)
 	//nolint
-	ctx := context.WithValue(ss.Context(), formatter.ExecutionContextKey, formatter.GRPCSource)
+	ctx := context.WithValue(ss.Context(), hook.ExecutionContextKey, hook.GRPCSource)
 	//nolint
 	wrapped.WrappedContext = context.WithValue(ctx, nbContext.RequestIDKey, reqID)
 	return handler(srv, wrapped)

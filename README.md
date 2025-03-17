@@ -1,4 +1,6 @@
 <div align="center">
+<br/>
+  <br/>
 <p align="center">
   <img width="234" src="docs/media/logo-full.png"/>
 </p>
@@ -10,7 +12,7 @@
        <img src="https://img.shields.io/badge/license-BSD--3-blue" />
      </a> 
     <br>
-    <a href="https://join.slack.com/t/netbirdio/shared_invite/zt-2utg2ncdz-W7LEB6toRBLE1Jca37dYpg">
+    <a href="https://join.slack.com/t/netbirdio/shared_invite/zt-31rofwmxc-27akKd0Le0vyRpBcwXkP0g">
         <img src="https://img.shields.io/badge/slack-@netbird-red.svg?logo=slack"/>
      </a>  
      <br>
@@ -27,10 +29,14 @@
   <br/>
   See <a href="https://netbird.io/docs/">Documentation</a>
   <br/>
-   Join our <a href="https://join.slack.com/t/netbirdio/shared_invite/zt-2utg2ncdz-W7LEB6toRBLE1Jca37dYpg">Slack channel</a>
+   Join our <a href="https://join.slack.com/t/netbirdio/shared_invite/zt-31rofwmxc-27akKd0Le0vyRpBcwXkP0g">Slack channel</a>
   <br/>
  
 </strong>
+<br>
+<a href="https://github.com/netbirdio/kubernetes-operator">
+    New: NetBird Kubernetes Operator
+  </a> 
 </p>
 
 <br>
